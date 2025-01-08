@@ -1,0 +1,9 @@
+[package]
+name = "savegame-reader"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+flate2 = "1.0.35"  # zlib
+xz2 = "0.1.7"    # lzma
+slint = "1.9.1"  # gui
