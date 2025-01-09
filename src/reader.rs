@@ -122,9 +122,7 @@ impl<'a> DataReader<'a> {
             let byte2 = self.read_byte();
             let byte3 = self.read_byte();
             (
-                (((byte & 0b00011111) as u32) << 16)
-                    | ((byte2 & 0b00111111) as u32) << 8
-                    | byte3 as u32,
+                (((byte & 0b00011111) as u32) << 16) | (byte2 as u32) << 8 | byte3 as u32,
                 3,
             )
         } else if byte & 0b00010000 == 0 {
@@ -133,9 +131,9 @@ impl<'a> DataReader<'a> {
             let byte4 = self.read_byte();
             (
                 (((byte & 0b00001111) as u32) << 24)
-                    | ((byte2 & 0b00111111) as u32) << 16
-                    | ((byte3 & 0b00111111) as u32) << 8
-                    | byte4 as u32,
+                    | (byte2 as u32) << 16
+                    | (byte3 as u32) << 8
+                    | (byte4 as u32),
                 4,
             )
         } else if byte & 0b00001000 == 0 {
@@ -144,11 +142,7 @@ impl<'a> DataReader<'a> {
             let byte4 = self.read_byte();
             let byte5 = self.read_byte();
             (
-                (((byte & 0b00000111) as u32) << 28)
-                    | ((byte2 & 0b00111111) as u32) << 22
-                    | ((byte3 & 0b00111111) as u32) << 16
-                    | ((byte4 & 0b00111111) as u32) << 8
-                    | byte5 as u32,
+                (byte2 as u32) << 24 | (byte3 as u32) << 16 | (byte4 as u32) << 8 | byte5 as u32,
                 5,
             )
         } else {
@@ -201,28 +195,34 @@ struct SavegameChunk {
     data: Vec<u8>, //TODO handle the data
 }
 
+#[derive(Debug)]
 enum DataHandlerChunks {
-    Riff = 0,
-    Array = 1,
-    SparseArray = 2,
-    Table = 3,
-    SparseTable = 4,
+    Riff,
+    Array,
+    SparseArray,
+    Table,
+    SparseTable,
 }
 
 #[derive(Debug, PartialEq)]
-enum TableDataType {
-    None = 0,
-    Int8 = 1,
-    Uint8 = 2,
-    Int16 = 3,
-    Uint16 = 4,
-    Int32 = 5,
-    Uint32 = 6,
-    Int64 = 7,
-    Uint64 = 8,
-    StringID = 9,
-    Str = 10,
-    Struct = 11,
+enum Value {
+    I8,
+    U8,
+    I16,
+    U16,
+    I32,
+    U32,
+    I64,
+    U64,
+    StringID,
+    String,
+    Struct,
+}
+
+#[derive(Debug)]
+enum TableType {
+    HashMap(HashMap<String, (Value, bool)>),
+    TableType(Box<TableType>),
 }
 
 struct DataHandler<'a> {
@@ -238,63 +238,75 @@ impl<'a> DataHandler<'a> {
         }
     }
 
-    fn read_table_keys(&self, data: &Vec<u8>) -> Vec<String> {
-        // create a new DataReader with the data
-        let mut table_reader = DataReader::new(data);
-        // process the strings
-        let mut keys = vec![];
+    fn read_table_entries(&self, table_reader: &mut DataReader) -> HashMap<String, (Value, bool)> {
+        let mut entries = HashMap::new();
         loop {
-            let mut first = table_reader.read_byte();
-            // TODO properly handle lists
+            let first = table_reader.read_byte();
             if first == 0 {
-                first = table_reader.read_byte();
-                println!("skipped a byte");
-            }
-            let length = table_reader.read_gamma().0;
-            if length == 0 {
                 break;
             }
-            let is_list = first & 0b00010000 == 0b00010000;
-            let key_type = match first & 0b00001111 {
-                0 => TableDataType::None,
-                1 => TableDataType::Int8,
-                2 => TableDataType::Uint8,
-                3 => TableDataType::Int16,
-                4 => TableDataType::Uint16,
-                5 => TableDataType::Int32,
-                6 => TableDataType::Uint32,
-                7 => TableDataType::Int64,
-                8 => TableDataType::Uint64,
-                9 => TableDataType::StringID,
-                10 => TableDataType::Str,
-                11 => TableDataType::Struct,
-                _ => panic!("Unknown table data type: {}", first),
+
+            let is_gamma = first & 0b0001_0000 == 0b0001_0000;
+            let key_type = match first << 4 >> 4 {
+                1 => Value::I8,
+                2 => Value::U8,
+                3 => Value::I16,
+                4 => Value::U16,
+                5 => Value::I32,
+                6 => Value::U32,
+                7 => Value::I64,
+                8 => Value::U64,
+                9 => Value::StringID,
+                10 => Value::String,
+                11 => Value::Struct,
+                _ => panic!(
+                    "Unknown value type {}, at position {}",
+                    first, table_reader.position
+                ),
             };
-            let key = table_reader.read_bytes(length as usize);
-            // turn the key into a string
-            let key = String::from_utf8(key).unwrap();
-            println!(
-                "Key type: {:?}, is list: {}, key: {}, Length: {}",
-                key_type, is_list, key, length
-            );
-            keys.push(key);
+
+            let second = table_reader.read_gamma().0;
+            let key = String::from_utf8(table_reader.read_bytes(second as usize)).unwrap();
+            entries.insert(key, (key_type, is_gamma));
         }
-        keys
+        entries
+    }
+
+    fn read_subtables(&self, table_reader: &mut DataReader, tables: &HashMap<String, (Value, bool)>) -> TableType {
+        let mut entries = HashMap::new();
+        for (key, (key_type, _)) in tables.iter() {
+            if key_type != &Value::Struct {
+                continue;
+            }
+            let table = self.read_table_entries(table_reader);
+            // FIXME subtables
+            // TODO handle the subtables
+            // check if there are other subtables.
+        }
+        TableType::HashMap(tables.clone())
+    }
+
+    fn read_table_header(&self, table_reader: &mut DataReader) -> HashMap<String, (Value, bool)> {
+        let header = self.read_table_entries(table_reader);
+        println!("{:?}", header);
+        header
     }
 
     fn handle_riff(&self) -> Vec<u8> {
-        Vec::new()
+        Vec::new() // TODO
     }
+
     fn handle_table(&mut self) -> Vec<u8> {
         let header_size = self.reader.read_gamma().0;
         println!("Header size: {}", header_size);
         let headers = self.reader.read_bytes(header_size as usize);
-        let keys = self.read_table_keys(&headers);
+        let mut table_reader = DataReader::new(&headers);
+        let keys = self.read_table_header(&mut table_reader);
         println!("Keys: {:?}", keys);
 
-        let data_size = self.reader.read_gamma().0;
-        println!("Data size: {}", data_size);
-        let data = self.reader.read_bytes(data_size as usize);
+        // let data_size = self.reader.read_gamma().0;
+        // println!("Data size: {}", data_size);
+        // let data = self.reader.read_bytes(data_size as usize);
         // handle the headers
         // also handle the data
         headers
@@ -389,6 +401,6 @@ impl Savegame {
         self.load();
         let mut data_handler = DataHandler::new(&self.data);
         let a = data_handler.read_chunk();
-        println!("{:?}, {}, {:02X?}", a.label, a.chunk_type as u8, a.data);
+        println!("{:?}, {:?}, {:02X?}", a.label, a.chunk_type, a.data);
     }
 }
