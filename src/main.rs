@@ -15,7 +15,6 @@ fn main() {
     } else {
         "output_savegame.sav".to_string()
     };
-    savegame.process();
     savegame.save(output_path);
-    println!("Version: {}", savegame.version);
+    println!("{}, {}, {}, {:?}", savegame.path, savegame.data.len(), savegame.version, savegame.compression);
 }
